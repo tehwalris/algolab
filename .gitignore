@@ -1,0 +1,8 @@
+/assessments
+
+.vscode
+.cx_metadata.json
+a
+*.in
+*.out
+*.bak
