@@ -110,10 +110,21 @@ private:
     // https://en.wikipedia.org/wiki/Widest_path_problem
     // More or less Dijkstra from some infinite face, but with min width along the path instead of distance
 
-    std::set<QueueElement> queue{QueueElement(inf_width, triangulation.infinite_face())};
+    std::set<QueueElement> queue;
+    square_exit_diameter_by_face.resize(number_of_faces);
+    for (auto it = triangulation.all_faces_begin(); it != triangulation.all_faces_end(); it++)
+    {
+      QueueElement element(inf_width, it);
+      if (!triangulation.is_infinite(it))
+      {
+        auto dual = triangulation.dual(it);
+        element.width = CGAL::squared_distance(dual, it->vertex(0)->point());
+      }
+      queue.insert(element);
+      square_exit_diameter_by_face.at(element.face->info()) = element.width;
+    }
+
     std::vector<bool> finished_by_face(number_of_faces, false);
-    square_exit_diameter_by_face.resize(number_of_faces, 0);
-    square_exit_diameter_by_face.at(queue.begin()->face->info()) = queue.begin()->width;
     while (!queue.empty())
     {
       const K::FT prev_width = queue.begin()->width;
@@ -183,6 +194,7 @@ private:
     DEBUG(3, "bottleneck " << bottleneck << " long_critical_dist " << long_critical_dist);
     if (bottleneck >= long_critical_dist)
     {
+      // balloon can be moved to another triangle (or outside the forest) and launched there
       return true;
     }
 
