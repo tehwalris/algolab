@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cassert>
+#include <queue>
 #include <CGAL/Exact_predicates_exact_constructions_kernel.h>
 #include <CGAL/Triangulation_vertex_base_2.h>
 #include <CGAL/Triangulation_face_base_with_info_2.h>
@@ -25,11 +26,29 @@ K::FT square(const K::FT &ft)
   return ft * ft;
 }
 
+const K::FT inf_width = 16 * square(K::FT(1L << 50));
+
 struct Balloon
 {
   K::Point_2 loc;
   double s;
 };
+
+class QueueElement
+{
+public:
+  QueueElement(const K::FT &width, const Triangulation::Face_handle &face) : width(width), face(face){};
+
+  K::FT width;
+  Triangulation::Face_handle face;
+};
+
+// sort by descending width
+bool operator<(const QueueElement &a, const QueueElement &b)
+{
+  // IMPORTANT This function must also order by face, otherwise set lookups will not work correctly
+  return a.width > b.width || (a.width == b.width && a.face->info() < b.face->info());
+}
 
 class Testcase
 {
@@ -61,31 +80,17 @@ public:
 
     triangulation.insert(tree_locations.begin(), tree_locations.end());
     int next_free_face_index = 0;
-    for (auto it = triangulation.finite_faces_begin(); it != triangulation.finite_faces_end(); it++)
+    for (auto it = triangulation.all_faces_begin(); it != triangulation.all_faces_end(); it++)
     {
       it->info() = next_free_face_index++;
     }
     number_of_faces = next_free_face_index;
-    launchable_by_face.resize(number_of_faces, false);
 
-    std::vector<int> sorted_balloon_indices(m); // largest radius first
-    for (int i = 0; i < m; i++)
-    {
-      sorted_balloon_indices.at(i) = i;
-    }
-    std::sort(sorted_balloon_indices.begin(), sorted_balloon_indices.end(), [this](const int ia, const int ib) {
-      return balloons.at(ia).s > balloons.at(ib).s;
-    });
+    calculate_square_exit_diameters();
 
-    std::vector<bool> can_launch_by_balloon(m);
-    for (const int i : sorted_balloon_indices)
+    for (const Balloon &b : balloons)
     {
-      can_launch_by_balloon.at(i) = try_launch_balloon(balloons.at(i));
-    }
-
-    for (const bool can_launch : can_launch_by_balloon)
-    {
-      std::cout << (can_launch ? "y" : "n");
+      std::cout << (can_launch_balloon(b) ? "y" : "n");
     }
 
     std::cout << "\n";
@@ -98,16 +103,70 @@ private:
   std::vector<Balloon> balloons;
   Triangulation triangulation;
   int number_of_faces;
-  std::vector<bool> launchable_by_face;
+  std::vector<K::FT> square_exit_diameter_by_face;
 
-  bool try_launch_balloon(const Balloon &b)
+  void calculate_square_exit_diameters()
+  {
+    // https://en.wikipedia.org/wiki/Widest_path_problem
+    // More or less Dijkstra from some infinite face, but with min width along the path instead of distance
+
+    std::set<QueueElement> queue{QueueElement(inf_width, triangulation.infinite_face())};
+    std::vector<bool> finished_by_face(number_of_faces, false);
+    square_exit_diameter_by_face.resize(number_of_faces, 0);
+    square_exit_diameter_by_face.at(queue.begin()->face->info()) = queue.begin()->width;
+    while (!queue.empty())
+    {
+      const K::FT prev_width = queue.begin()->width;
+      const Triangulation::Face_handle prev_face = queue.begin()->face;
+      queue.erase(queue.begin());
+      assert(!finished_by_face.at(prev_face->info()));
+      finished_by_face.at(prev_face->info()) = true;
+
+      DEBUG(3, "current face " << prev_face->info() << " " << prev_width);
+
+      for (int i = 0; i < 3; i++)
+      {
+        const Triangulation::Face_handle next_face = prev_face->neighbor(i);
+        DEBUG(3, "next_face->info() " << next_face->info());
+        if (finished_by_face.at(next_face->info()))
+        {
+          continue;
+        }
+
+        const K::FT new_width = std::min(
+            prev_width,
+            (triangulation.is_infinite(prev_face) && triangulation.is_infinite(next_face))
+                ? inf_width
+                : triangulation.segment(prev_face, i).squared_length());
+        K::FT &saved_width = square_exit_diameter_by_face.at(next_face->info());
+        if (new_width <= saved_width)
+        {
+          continue;
+        }
+
+        DEBUG(3, "improve face " << next_face->info() << " " << saved_width << " " << new_width);
+
+        const auto it_to_remove = queue.find(QueueElement(saved_width, next_face));
+        if (it_to_remove != queue.end())
+        {
+          queue.erase(it_to_remove);
+        }
+        queue.insert(QueueElement(new_width, next_face));
+        saved_width = new_width;
+      }
+    }
+
+    assert(*std::min_element(finished_by_face.begin(), finished_by_face.end()));
+  }
+
+  bool can_launch_balloon(const Balloon &b)
   {
     const K::FT short_critical_dist = square(K::FT(r) + K::FT(b.s));
-    const K::FT critical_dist = 4 * short_critical_dist;
+    const K::FT long_critical_dist = 4 * short_critical_dist;
 
     const Triangulation::Vertex_handle tree = triangulation.nearest_vertex(b.loc);
     const K::FT center_sq_dist = CGAL::squared_distance(tree->point(), b.loc);
-    if (center_sq_dist >= critical_dist)
+    if (center_sq_dist >= long_critical_dist)
     {
       // balloon can immediately be launched
       return true;
@@ -118,65 +177,15 @@ private:
       return false;
     }
 
-    std::vector<int> newly_launchable_face_indices;
-    const auto update_launchable = [&newly_launchable_face_indices, this]() {
-      for (const int i : newly_launchable_face_indices)
-      {
-        assert(i >= 0 && i < number_of_faces);
-        assert(!launchable_by_face.at(i));
-        launchable_by_face.at(i) = true;
-      }
-    };
-
-    std::vector<bool> ever_queued_faces(number_of_faces, false);
-    std::deque<Triangulation::Face_handle> dfs_queue{triangulation.locate(b.loc)};
-    if (triangulation.is_infinite(dfs_queue.front()) || launchable_by_face.at(dfs_queue.front()->info()))
+    const Triangulation::Face_handle face = triangulation.locate(b.loc);
+    DEBUG(3, "face " << face->info());
+    const K::FT bottleneck = square_exit_diameter_by_face.at(face->info());
+    DEBUG(3, "bottleneck " << bottleneck << " long_critical_dist " << long_critical_dist);
+    if (bottleneck >= long_critical_dist)
     {
       return true;
     }
-    ever_queued_faces.at(dfs_queue.front()->info()) = true;
-    newly_launchable_face_indices.push_back(dfs_queue.front()->info());
-    while (!dfs_queue.empty())
-    {
-      Triangulation::Face_handle face = dfs_queue.front();
-      dfs_queue.pop_front();
 
-      if (triangulation.is_infinite(face))
-      {
-        // balloon can be moved out of the forest
-        update_launchable();
-        return true;
-      }
-
-      for (int i = 0; i < 3; i++)
-      {
-        Triangulation::Face_handle next_face = face->neighbor(i);
-        const bool is_infinite = triangulation.is_infinite(next_face);
-        const int next_face_i = next_face->info(); // only valid if !is_infinite
-        if (!is_infinite && ever_queued_faces.at(next_face_i))
-        {
-          continue;
-        }
-        if (triangulation.segment(face, i).squared_length() < critical_dist)
-        {
-          continue;
-        }
-        if (!is_infinite && launchable_by_face.at(next_face_i))
-        {
-          // a balloon at least this big was moved through this triangle and eventually launched
-          update_launchable();
-          return true;
-        }
-        dfs_queue.push_back(next_face);
-        if (!is_infinite)
-        {
-          ever_queued_faces.at(next_face_i) = true;
-          newly_launchable_face_indices.push_back(next_face_i);
-        }
-      }
-    }
-
-    // TODO
     return false;
   }
 };
