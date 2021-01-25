@@ -29,6 +29,42 @@ struct Booking
 
 const int max_possible_profit = 100;
 
+class TimeIndexer
+{
+public:
+  void add_time(int t)
+  {
+    time_set.insert(t);
+  }
+
+  void rebuild()
+  {
+    time_vector.resize(time_set.size());
+    std::copy(time_set.begin(), time_set.end(), time_vector.begin());
+  }
+
+  int time_to_index(int t) const
+  {
+    const auto it = std::lower_bound(time_vector.begin(), time_vector.end(), t);
+    assert(it != time_vector.end() && *it == t);
+    return it - time_vector.begin();
+  }
+
+  int index_to_time(int i) const
+  {
+    return time_vector.at(i);
+  }
+
+  int size() const
+  {
+    return time_set.size();
+  }
+
+private:
+  std::set<int> time_set;
+  std::vector<int> time_vector;
+};
+
 void testcase()
 {
   int n, s;
@@ -55,29 +91,41 @@ void testcase()
     assert(b.p >= 1 && b.p <= max_possible_profit);
   }
 
-  std::set<int> global_time_set;
+  TimeIndexer global_time_indexer;
+  std::vector<TimeIndexer> local_time_indexers(s);
   for (Booking &b : bookings)
   {
-    global_time_set.insert(b.d);
-    global_time_set.insert(b.a);
+    global_time_indexer.add_time(b.d);
+    global_time_indexer.add_time(b.a);
+    local_time_indexers.at(b.s).add_time(b.d);
+    local_time_indexers.at(b.t).add_time(b.a);
   }
-  std::vector<int> global_time_vector(global_time_set.size());
-  std::copy(global_time_set.begin(), global_time_set.end(), global_time_vector.begin());
-  auto time_to_index = [&global_time_vector](int time) {
-    const auto it = std::lower_bound(global_time_vector.begin(), global_time_vector.end(), time);
-    assert(it != global_time_vector.end() && *it == time);
-    return it - global_time_vector.begin();
-  };
-  const int num_time_slots = global_time_set.size();
+
+  global_time_indexer.rebuild();
+  for (TimeIndexer &local_time_indexer : local_time_indexers)
+  {
+    // IMPORTANT The first and last global time must exist at every station, otherwise
+    // the max_possible_profit * global_time_slot_delta compensation won't work correctly
+    local_time_indexer.add_time(global_time_indexer.index_to_time(0));
+    local_time_indexer.add_time(global_time_indexer.index_to_time(global_time_indexer.size() - 1));
+
+    local_time_indexer.rebuild();
+  }
+
+  std::vector<int> local_time_slot_cumulative_sum{0};
+  for (int i = 0; i < s; i++)
+  {
+    local_time_slot_cumulative_sum.push_back(local_time_slot_cumulative_sum.back() + local_time_indexers.at(i).size());
+  }
 
   int next_free_node = 0;
   const int node_source = next_free_node++;
   const int node_target = next_free_node++;
-  const auto get_station_time_node = [next_free_node, s, num_time_slots, &time_to_index](const int i_time, const int i_station) {
-    assert(i_station >= 0 && i_station < s && i_time >= 0 && i_time < num_time_slots);
-    return next_free_node + num_time_slots * i_station + i_time;
+  const auto get_station_time_node = [next_free_node, s, &local_time_indexers, &local_time_slot_cumulative_sum](const int i_time, const int i_station) {
+    assert(i_station >= 0 && i_station < s && i_time >= 0 && i_time < local_time_indexers.at(i_station).size());
+    return next_free_node + local_time_slot_cumulative_sum.at(i_station) + i_time;
   };
-  next_free_node += s * num_time_slots;
+  next_free_node += local_time_slot_cumulative_sum.back();
   const auto get_trip_node = [next_free_node, n](const int i_trip) {
     assert(i_trip >= 0 && i_trip < n);
     return next_free_node + i_trip;
@@ -102,27 +150,32 @@ void testcase()
 
   for (int i_station = 0; i_station < s; i_station++)
   {
-    add_edge(node_source, get_station_time_node(0, i_station), initial_cars_by_station.at(i_station), 0);
-    add_edge(get_station_time_node(num_time_slots - 1, i_station), node_target, total_cars, 0);
+    const TimeIndexer &local_time_indexer = local_time_indexers.at(i_station);
 
-    for (int i_time = 1; i_time < num_time_slots; i_time++)
+    add_edge(node_source, get_station_time_node(0, i_station), initial_cars_by_station.at(i_station), 0);
+    add_edge(get_station_time_node(local_time_indexer.size() - 1, i_station), node_target, total_cars, 0);
+
+    for (int i_time = 1; i_time < local_time_indexer.size(); i_time++)
     {
-      add_edge(get_station_time_node(i_time - 1, i_station), get_station_time_node(i_time, i_station), total_cars, max_possible_profit);
+      const int global_time_slot_delta = global_time_indexer.time_to_index(local_time_indexer.index_to_time(i_time)) - global_time_indexer.time_to_index(local_time_indexer.index_to_time(i_time - 1));
+      assert(global_time_slot_delta > 0);
+      add_edge(get_station_time_node(i_time - 1, i_station), get_station_time_node(i_time, i_station), total_cars, global_time_slot_delta * max_possible_profit);
     }
   }
 
   for (int i_trip = 0; i_trip < n; i_trip++)
   {
     Booking &b = bookings.at(i_trip);
-    const int i_d = time_to_index(b.d), i_a = time_to_index(b.a);
-    assert(i_d < i_a);
-    add_edge(get_station_time_node(i_d, b.s), get_trip_node(i_trip), 1, max_possible_profit * (i_a - i_d) - b.p);
+    const int i_d = local_time_indexers.at(b.s).time_to_index(b.d), i_a = local_time_indexers.at(b.t).time_to_index(b.a);
+    const int global_time_slot_delta = global_time_indexer.time_to_index(b.a) - global_time_indexer.time_to_index(b.d);
+    assert(global_time_slot_delta > 0);
+    add_edge(get_station_time_node(i_d, b.s), get_trip_node(i_trip), 1, max_possible_profit * global_time_slot_delta - b.p);
     add_edge(get_trip_node(i_trip), get_station_time_node(i_a, b.t), 1, 0);
   }
 
   boost::successive_shortest_path_nonnegative_weights(G, node_source, node_target);
   const int flow_cost = boost::find_flow_cost(G);
-  const int total_profit = total_cars * (num_time_slots - 1) * max_possible_profit - flow_cost;
+  const int total_profit = total_cars * (global_time_indexer.size() - 1) * max_possible_profit - flow_cost;
   std::cout << total_profit << "\n";
 }
 
