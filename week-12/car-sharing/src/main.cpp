@@ -55,11 +55,20 @@ void testcase()
     assert(b.p >= 1 && b.p <= max_possible_profit);
   }
 
-  const auto time_to_index = [](int time) {
-    // TODO handle less restricted times
-    return std::min(time, 10000) / 30;
+  std::set<int> global_time_set;
+  for (Booking &b : bookings)
+  {
+    global_time_set.insert(b.d);
+    global_time_set.insert(b.a);
+  }
+  std::vector<int> global_time_vector(global_time_set.size());
+  std::copy(global_time_set.begin(), global_time_set.end(), global_time_vector.begin());
+  auto time_to_index = [&global_time_vector](int time) {
+    const auto it = std::lower_bound(global_time_vector.begin(), global_time_vector.end(), time);
+    assert(it != global_time_vector.end() && *it == time);
+    return it - global_time_vector.begin();
   };
-  const int num_time_slots = time_to_index(10000) + 1;
+  const int num_time_slots = global_time_set.size();
 
   int next_free_node = 0;
   const int node_source = next_free_node++;
