@@ -11,8 +11,7 @@ const int debug_level = 0;
     std::cerr << x << std::endl; \
   }
 
-typedef std::pair<int, int> Cell;
-typedef std::vector<Cell> Table;
+typedef std::pair<int, int> VarietyCell;
 
 const int dp_impossible = -1;
 
@@ -27,39 +26,44 @@ void testcase()
   std::cin >> n >> k;
   assert(n >= 1 && n <= 100 && k >= 1 && k <= 1e4);
 
+  int largest_beverage_volume = 0;
   std::vector<Beverage> beverages(n);
   for (Beverage &b : beverages)
   {
     std::cin >> b.c >> b.v;
     assert(b.c >= 1 && b.c <= 1e4);
     assert(b.v >= 1 && b.v <= 1e4);
+    largest_beverage_volume = std::max(largest_beverage_volume, b.v);
   }
 
-  Table dp_table(k + 1, std::make_pair(dp_impossible, 0));
-  dp_table.at(0) = std::make_pair(0, 0);
+  // What is the minimum cost to get exactly i_col liters using no more than 1 bottle of every drink? (variety_table.at(i_col).first)
+  // How many different drinks can we get at that minimum cost? (variety_table.at(i_col).second)
+  std::vector<VarietyCell> variety_table(k + 1, std::make_pair(dp_impossible, 0));
+  variety_table.at(0) = std::make_pair(0, 0);
   for (int i_beverage = 0; i_beverage < n; i_beverage++)
   {
     const Beverage &b = beverages.at(i_beverage);
-    Table next_dp_table = dp_table;
     for (int i_col = k; i_col >= 0; i_col--)
     {
-      const Cell &source_cell = next_dp_table.at(i_col);
+      const VarietyCell &source_cell = variety_table.at(i_col);
       if (source_cell.first == dp_impossible)
       {
         continue;
       }
-      Cell new_value = std::make_pair(source_cell.first + b.c, source_cell.second - 1);
-      Cell &target_cell = next_dp_table.at(std::min(i_col + b.v, k));
+      VarietyCell new_value = std::make_pair(source_cell.first + b.c, source_cell.second - 1);
+      VarietyCell &target_cell = variety_table.at(std::min(i_col + b.v, k));
       if (target_cell.first == dp_impossible || new_value < target_cell)
       {
         target_cell = new_value;
       }
     }
-    dp_table = next_dp_table;
   }
 
-  std::vector<int> filler_table(2 * k + 1, dp_impossible);
+  // What is the minimum cost to get at least i_col liters (using any amount of any drinks)? (filler_table.at(i_col))
+  // HACK Pad filler_table with k elements so that we can overshoot by up to a whole drink
+  std::vector<int> filler_table(k + 1 + largest_beverage_volume, dp_impossible);
   filler_table.at(0) = 0;
+  // First calculate the cost to get exactly i_col liters
   for (int i_col = 1; i_col < int(filler_table.size()); i_col++)
   {
     int &target_cell = filler_table.at(i_col);
@@ -82,6 +86,7 @@ void testcase()
       }
     }
   }
+  // Now backfill the table in case it's sometimes cheaper to get more than the needed amount
   int cheapest_for_at_least_this = dp_impossible;
   for (int i_col = int(filler_table.size() - 1); i_col >= 0; i_col--)
   {
@@ -104,7 +109,7 @@ void testcase()
   int most_beverages = 0;
   for (int i_col = 1; i_col <= k; i_col++)
   {
-    const Cell &variety_cell = dp_table.at(i_col);
+    const VarietyCell &variety_cell = variety_table.at(i_col);
     if (variety_cell.first == dp_impossible || variety_cell.first > cheapest_price)
     {
       continue;
