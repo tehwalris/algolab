@@ -11,8 +11,8 @@ const int debug_level = 0;
     std::cerr << x << std::endl; \
   }
 
-typedef std::vector<int> Row;
-typedef std::vector<Row> Table;
+typedef std::pair<int, int> Cell;
+typedef std::vector<Cell> Table;
 
 const int dp_impossible = -1;
 
@@ -35,45 +35,95 @@ void testcase()
     assert(b.v >= 1 && b.v <= 1e4);
   }
 
-  Table dp_table(n + 1, Row(k + 1, dp_impossible));
-  dp_table.at(0).at(0) = 0;
+  Table dp_table(k + 1, std::make_pair(dp_impossible, 0));
+  dp_table.at(0) = std::make_pair(0, 0);
   for (int i_beverage = 0; i_beverage < n; i_beverage++)
   {
     const Beverage &b = beverages.at(i_beverage);
-    for (int i_row = i_beverage; i_row >= 0; i_row--)
+    Table next_dp_table = dp_table;
+    for (int i_col = k; i_col >= 0; i_col--)
     {
-      for (int i_col = k; i_col >= 0; i_col--)
+      const Cell &source_cell = next_dp_table.at(i_col);
+      if (source_cell.first == dp_impossible)
       {
-        const int old_cell = dp_table.at(i_row).at(i_col);
-        if (old_cell == dp_impossible)
-        {
-          continue;
-        }
-        for (int i_col_new = i_col + b.v, added_cost = b.c; i_col_new < k + b.v; i_col_new += b.v, added_cost += b.c)
-        {
-          int &new_cell = dp_table.at(i_row + 1).at(std::min(i_col_new, k));
-          if (new_cell == dp_impossible || new_cell > old_cell + added_cost)
-          {
-            new_cell = old_cell + added_cost;
-          }
-        }
+        continue;
+      }
+      Cell new_value = std::make_pair(source_cell.first + b.c, source_cell.second - 1);
+      Cell &target_cell = next_dp_table.at(std::min(i_col + b.v, k));
+      if (target_cell.first == dp_impossible || new_value < target_cell)
+      {
+        target_cell = new_value;
+      }
+    }
+    dp_table = next_dp_table;
+  }
+
+  std::vector<int> filler_table(2 * k + 1, dp_impossible);
+  filler_table.at(0) = 0;
+  for (int i_col = 1; i_col < int(filler_table.size()); i_col++)
+  {
+    int &target_cell = filler_table.at(i_col);
+    for (int i_beverage = 0; i_beverage < n; i_beverage++)
+    {
+      const Beverage &b = beverages.at(i_beverage);
+      if (i_col - b.v < 0)
+      {
+        continue;
+      }
+      const int source_cell = filler_table.at(i_col - b.v);
+      if (source_cell == dp_impossible)
+      {
+        continue;
+      }
+      int new_value = source_cell + b.c;
+      if (target_cell == dp_impossible || new_value < target_cell)
+      {
+        target_cell = new_value;
       }
     }
   }
-
-  int cheapest_cost = std::numeric_limits<int>::max();
-  int most_beverages_at_cheapest = 0;
-  for (int i = n; i >= 0; i--)
+  int cheapest_for_at_least_this = dp_impossible;
+  for (int i_col = int(filler_table.size() - 1); i_col >= 0; i_col--)
   {
-    const int cell = dp_table.at(i).at(k);
-    if (cell != dp_impossible && cell < cheapest_cost)
+    int &v = filler_table.at(i_col);
+    if (cheapest_for_at_least_this == dp_impossible)
     {
-      cheapest_cost = cell;
-      most_beverages_at_cheapest = i;
+      cheapest_for_at_least_this = v;
+    }
+    else if (v == dp_impossible || v > cheapest_for_at_least_this)
+    {
+      v = cheapest_for_at_least_this;
+    }
+    else
+    {
+      cheapest_for_at_least_this = v;
     }
   }
 
-  std::cout << cheapest_cost << " " << most_beverages_at_cheapest << "\n";
+  const int cheapest_price = filler_table.at(k);
+  int most_beverages = 0;
+  for (int i_col = 1; i_col <= k; i_col++)
+  {
+    const Cell &variety_cell = dp_table.at(i_col);
+    if (variety_cell.first == dp_impossible || variety_cell.first > cheapest_price)
+    {
+      continue;
+    }
+    const int filler_cost = filler_table.at(k - i_col);
+    if (filler_cost == dp_impossible)
+    {
+      continue;
+    }
+    const int mixed_price = variety_cell.first + filler_cost;
+    if (mixed_price > cheapest_price)
+    {
+      continue;
+    }
+    assert(mixed_price == cheapest_price);
+    most_beverages = std::max(most_beverages, -variety_cell.second);
+  }
+
+  std::cout << cheapest_price << " " << most_beverages << "\n";
 }
 
 int main()
