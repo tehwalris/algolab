@@ -26,7 +26,7 @@ const int unreachable_distance = std::numeric_limits<int>::max();
 bool check_shelter_reachable_in_t(const std::vector<std::vector<int>> &distance_matrix, const int t)
 {
   const int a = distance_matrix.size();
-  const int s = distance_matrix.at(0).size();
+  const int s = distance_matrix.at(0).size(); // HACK This might be double the s in testcase()
 
   int next_free_node = 0;
   const int node_source = next_free_node++;
@@ -161,7 +161,7 @@ void testcase()
     assert(node >= 0 && node < n);
   }
 
-  std::vector<std::vector<int>> distance_matrix(a, std::vector<int>(s));
+  std::vector<std::vector<int>> distance_matrix(a, std::vector<int>(c * s, unreachable_distance));
   std::vector<int> temp_distances(n);
   auto temp_distance_map = boost::make_iterator_property_map(temp_distances.begin(), boost::get(boost::vertex_index, G));
   for (int i_a = 0; i_a < a; i_a++)
@@ -169,8 +169,16 @@ void testcase()
     boost::dijkstra_shortest_paths(G, nodes_by_agent.at(i_a), boost::distance_map(temp_distance_map).distance_inf(unreachable_distance));
     for (int i_s = 0; i_s < s; i_s++)
     {
-      distance_matrix.at(i_a).at(i_s) = temp_distances.at(nodes_by_shelter.at(i_s));
-      DEBUG(4, "distance_matrix.at(" << i_a << ").at(" << i_s << ") = " << distance_matrix.at(i_a).at(i_s));
+      const int dist = temp_distances.at(nodes_by_shelter.at(i_s));
+      if (dist != unreachable_distance)
+      {
+        for (int i_c = 0; i_c < c; i_c++)
+        {
+          const int virtual_i_s = i_c * s + i_s;
+          distance_matrix.at(i_a).at(virtual_i_s) = dist + i_c * d;
+          DEBUG(4, "distance_matrix.at(" << i_a << ").at(" << virtual_i_s << ") = " << distance_matrix.at(i_a).at(virtual_i_s));
+        }
+      }
     }
   }
 
